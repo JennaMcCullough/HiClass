@@ -1,0 +1,301 @@
+#########################################################################################################
+#
+# ClaHiSSE+HiClad using the Bouch elevation dataset 
+#
+# authors: Jenna McCullough and Rosana Zenil-Ferguson
+# last modified: 17/12/24 
+# this model allows for hidden cladogenesis, hidden anagenesis  WITH SAME RATES 
+#########################################################################################################
+#######################
+# Reading in the Data #
+#######################
+
+setOption("useScaling","true")
+NUM_STATES = 4
+### Read in the data
+# 0 = "coast"
+# 1 = "montane"  
+
+observed_phylogeny <- readTrees("MCC_AFRICANRESTIOS.tre")[1]
+data <- readCharacterDataDelimited("Elevation_322spp.tsv",stateLabels=2,type="NaturalNumbers",delimiter="\t",header=FALSE)
+# Get some useful variables from the data. We need these later on.
+taxa <- observed_phylogeny.taxa()
+
+data_exp <- data.expandCharacters(2)
+# after expanding the data, it looks like this 
+# 0A = in rev code, this is 1
+# 1A = in rev code, this is 2
+# 0B = in rev code, this is 3
+# 1B = in rev code, this is 4
+
+# set my move index
+mvi = 0
+mni = 0
+
+H = 0.587405
+
+####################
+# Create the extinction rates #
+####################
+
+### Specify a prior on the diversification and turnover rate
+
+### Create the constant prior parameters of the diversification rates
+num_species <- 337 # Number of surviving lineages is 337 from 340
+rate_mean <- ln( ln(num_species/2.0) / observed_phylogeny.rootAge() )
+rate_sd <- 2*H
+
+# set up extinction rates
+extinction_rates[1] ~ dnLognormal(rate_mean, rate_sd) # extinction for 0A
+extinction_rates[2] ~ dnLognormal(rate_mean, rate_sd) # extinction for 1A
+extinction_rates[3] ~ dnLognormal(rate_mean, rate_sd) # extinction for 0B
+extinction_rates[4] ~ dnLognormal(rate_mean, rate_sd) # extinction for 1B 
+
+# add MCMC moves for each extinction rate
+moves[++mvi] = mvSlide( extinction_rates[1], weight=4 )
+moves[++mvi] = mvSlide( extinction_rates[2], weight=4 )
+moves[++mvi] = mvSlide( extinction_rates[3], weight=4 )
+moves[++mvi] = mvSlide( extinction_rates[4], weight=4 )
+
+#########################################################
+# Set up the anagenetic transition rate matrix for observed states #
+#########################################################
+## I defined very loosely my gamma priors for rates in the Q-mat
+shape_pr := 0.5
+#rate_pr := 1
+############### Alternative definition or rate parameter
+# Each transition rate between observed states are drawn
+# from an exponential distribution with a mean of 10
+# character state transitions over the tree.
+ rate_pr := observed_phylogeny.treeLength()/5
+
+#these are the rates for anagenetic transitions
+anagenetic_transition_12 ~ dnGamma(shape_pr, rate_pr) #transition between 0A to 1A
+anagenetic_transition_21 ~ dnGamma(shape_pr, rate_pr) #transition between 1A to 01
+anagenetic_transition_34 ~ dnGamma(shape_pr, rate_pr) #transition between 0B to 1B
+anagenetic_transition_43 ~ dnGamma(shape_pr, rate_pr) #transition between 1B to 0B 
+
+#adding MCMC moves for each rate
+moves[++mvi] = mvSlide( anagenetic_transition_12, weight=4 )
+moves[++mvi] = mvSlide( anagenetic_transition_21, weight=4 )
+moves[++mvi] = mvSlide( anagenetic_transition_34, weight=4 )
+moves[++mvi] = mvSlide( anagenetic_transition_43, weight=4 )
+
+# rates between hidden rates 
+# A to B
+hidden_rate_1 ~ dnGamma(shape_pr, rate_pr)
+# B to A 
+hidden_rate_2 ~ dnGamma(shape_pr, rate_pr)
+moves[++mvi] = mvSlide( hidden_rate_2, weight=4 )
+moves[++mvi] = mvSlide( hidden_rate_1, weight=4 )
+
+
+###################################################################################
+# Create and populate the rate matrix for the combined observed and hidden states #
+###################################################################################
+
+# The anagenetic transitions will be stored in a
+# instantaneous rate matrix.
+# initalizing all rates to 0.0:
+for (i in 1:4) {
+    for (j in 1:4) {
+        r[i][j] <- 0.0
+    }
+}
+
+# Now we can populate non-zero rates into the anagenetic transition rate matrix:
+r[1][2] := anagenetic_transition_12
+r[2][1] := anagenetic_transition_21
+r[3][4] := anagenetic_transition_34
+r[3][3] := anagenetic_transition_43
+
+# these are the transitions between A and B states for all the states
+r[1][3] :=  hidden_rate_1  # q(0A) -> q(0B)
+r[3][1] :=  hidden_rate_2  # q(0B) -> q(0A)
+r[2][4] :=  hidden_rate_1  # q(1A) -> q(1B)
+r[4][2] :=  hidden_rate_2  # q(1B) -> q(1A)
+
+# Now we pass our vector of vectors into the fnFreeK function to create
+# the instaneous rate matrix.
+ana_rate_matrix := fnFreeK(r, rescaled=false)
+
+
+##################################################
+# Set up the cladogenetic speciation rate matrix #
+##################################################
+
+# character states 
+# 0A =  no poly A = Rev code this is 1 = for cladogenetic events only this is 0
+# 1A =  poly A    = Rev code this is 2 = for cladogenetic events only this is 1
+# 0B =  no poly B = Rev code this is 3 = for cladogenetic events only this is 2
+# 1B =  poly B    = Rev code this is 4 = for cladogenetic events only this is 3
+
+# Here we need to define each cladogenetic event type in the form
+# [ancestor_state, daughter1_state, daughter2_state]
+# and assign each cladogenetic event type a corresponding
+# speciation rate.
+
+## assign speciation rates. We are allowing for all the types of cladogenetic events
+# to have their own rate because we want to know if the trait of interest evolves 
+# in different ways 
+
+# All the cladogenetic events are going to have the same rates
+speciation_wide_sympatry ~ dnLognormal(rate_mean, rate_sd)
+moves[++mvi] = mvSlide( speciation_wide_sympatry, weight=2 )
+
+# 1. Speciation rates where there is in situ speciation 
+# this is when there is no state change, 0A -> 0A,0A or 1B -> 1B,1B)
+
+clado_events[1]  =  [0, 0, 0] # 0A -> 0A, 0A
+clado_events[2]  =  [1, 1, 1] # 1A -> 1A, 1A
+clado_events[11]  =  [2, 2, 2] # 0B -> 0B, 0B
+clado_events[12]  =  [3, 3, 3] # 1B -> 1B, 1B
+
+#give these events rates 
+speciation_rates[1] := speciation_wide_sympatry/2 #(s_0A rate)
+speciation_rates[2] := speciation_wide_sympatry/2 #(s_1A rate)
+speciation_rates[11] := speciation_wide_sympatry/2 #(s_0B rate)
+speciation_rates[12] := speciation_wide_sympatry/2 #(s_1B rate)
+
+
+# 2.  speciation where there is a state change but NOT BETWEEN HIDDEN states
+# this is like 0A -> 0A, 1A or 1B –> 1B, 0B 
+
+clado_events[3] = [0, 0, 1]  # 0A -> 0A, 1A
+clado_events[4] = [0, 1, 0]  # 0A -> 1A, 1A
+clado_events[5] = [1, 1, 0]  # 1A -> 1A, 0A
+clado_events[6] = [1, 0, 1]  # 1A -> 0A, 1A
+clado_events[13] = [2, 2, 3]  # 0B -> 0B, 1B
+clado_events[14] = [2, 3, 2]  # 0B -> 1B, 1B
+clado_events[15] = [3, 3, 2]  # 1B -> 1B, 0B
+clado_events[16] = [3, 2, 3]  # 1B -> 0B, 1B
+
+#give these rates 
+speciation_rates[3] := speciation_rates[1]  #(s_0A rate)
+speciation_rates[4] := speciation_rates[1] # (s_0A rate)
+speciation_rates[5] := speciation_rates[2] # (s_1A rate)
+speciation_rates[6] := speciation_rates[2] # (s_1A rate)
+speciation_rates[13] := speciation_rates[11]  #(s_0B rate)
+speciation_rates[14] := speciation_rates[11] # (s_0B rate)
+speciation_rates[15] := speciation_rates[12] # (s_1B rate)
+speciation_rates[16] := speciation_rates[12] # (s_1B rate)
+
+#  3. cladogenetic events occur between hidden states but NOT the trait 
+# this is like 0A -> 0A, 0B or 1B –> 1B, 1A  
+
+clado_events[7]  = [0, 0, 2] # 0A -> 0A, 0B
+clado_events[8]  = [0, 2, 0] # 0A -> 0B, 0A
+clado_events[9]  = [1, 1, 3] # 1A -> 1A, 1B
+clado_events[10]  = [1, 3, 1] # 1A -> 1B, 1A 
+clado_events[17]  = [2, 0, 2] # 0B -> 0A, 0B
+clado_events[18] = [2, 2, 0] # 0B -> 0B, 0A
+clado_events[19] = [3, 1, 3] # 1B -> 1A, 1B
+clado_events[20] = [3, 3, 1] # 1B -> 1B, 1A 
+
+speciation_rates[7] := speciation_rates[1]  #(s_0A rate)
+speciation_rates[8] := speciation_rates[1] # (s_0A rate)
+speciation_rates[9] := speciation_rates[2] # (s_1A rate)
+speciation_rates[10] := speciation_rates[2] # (s_1A rate)
+speciation_rates[17] := speciation_rates[11]  #(s_0B rate)
+speciation_rates[18] := speciation_rates[11] # (s_0B rate)
+speciation_rates[19] := speciation_rates[12] # (s_1B rate)
+speciation_rates[20] := speciation_rates[12] # (s_1B rate)
+
+# Now let's create a deterministic variable to monitor the overall speciation rate
+total_speciation := sum(speciation_rates)
+
+# The cladogenetic speciation rate
+# matrix from the cladogenetic event types and the speciation rates
+clado_matrix := fnCladogeneticSpeciationRateMatrix(clado_events, speciation_rates, 4)
+
+# Print clado_matrix
+clado_matrix
+
+########################################################################
+# Set up the cladogenetic character state dependent birth death process #
+#########################################################################
+
+#not fixing the root 
+#root_frequencies ~ dnDirichlet( rep(1,NUM_STATES) )
+root_frequencies ~ dnDirichlet( rep(1,4) )
+moves[++mvi] = mvDirichletSimplex(root_frequencies,tune=true,weight=2)
+
+
+### If we were going to fix the root: 
+# For simplicity we will fix the root frequences to be equal except for the null state
+# which has probability of 0.
+#root_frequencies <-[0.5,0,0.5,0]
+# this is fixed because we believe that the root is trait 0 (diploid)
+
+### I did not add any sampling of species but it is posible by setting this rho parameter
+### rho is the probability of sampling species at the present
+### fix this
+
+#rho <- observed_phylogeny.ntips()/num_species 
+# we sampled 337 of the 340 species 
+rho <- 337/340
+
+
+####################################################################
+# Building the ClaHiSSE+HiClad Model as discrete character model+ BD process#
+###################################################################
+
+### Here is where I tie speciation, extinction, and Q using a Birth-Death with categories
+ClaHiSSEhiClad ~ dnCDBDP( rootAge        = observed_phylogeny.rootAge(),
+                  cladoEventMap   = clado_matrix,
+                  extinctionRates = extinction_rates,
+                  Q               = ana_rate_matrix,
+                  delta           = 1.0,
+                  pi              = root_frequencies,
+                  rho             = rho,
+                  condition       = "time" )
+
+
+
+### clamp the model with the "observed" tree
+ClaHiSSEhiClad.clamp( observed_phylogeny )
+ClaHiSSEhiClad.clampCharData( data_exp )
+
+
+
+#############
+# The Model #
+#############
+
+
+### workspace model wrapper ###
+mymodel = model(speciation_wide_sympatry)
+
+### set up the monitors that will output parameter values to file and screen
+monitors[++mni] = mnModel(filename="output-same-rates/ClaHiSSEhiClad_sameCladoRates_.log", printgen=1)
+monitors[++mni] = mnScreen(printgen=10, anagenetic_transition_12, speciation_wide_sympatry, extinction_rates)
+
+
+################
+# The Analysis #
+################
+
+### workspace mcmc
+mymcmc = mcmc(mymodel, monitors, moves, nruns=3, moveschedule="random")
+
+### pre-burnin to tune the proposals 20% of the sample
+#mymcmc.burnin(generations=2000,tuningInterval=100)
+
+# when i need to restart it, uncomment
+#mymcmc.initializeFromCheckpoint(filename="output-same-rates/ClaHiSSEhiClad_sameCladoRates.checkpoint.txt") #comment out for first run
+
+
+### run the MCMC
+mymcmc.run(generations=250000, checkpointFile="output-same-rates/ClaHiSSEhiClad_sameCladoRates.checkpoint.txt", checkpointInterval=10)
+
+##############################
+# Summarize ancestral states #
+##############################
+
+
+#anc_states = readAncestralStateTrace("/home/eeg/shared/twostatesse/bissesi/output/anc_states_BiSSE_selfincomp250K.log")
+#anc_tree = ancestralStateTree(tree=observed_phylogeny, ancestral_state_trace_vector=anc_states, include_start_states=false, file="/home/eeg/shared/twostatesse/bissesi/output/anc_states_summaryBiSSEselfincomp250K.tree", burnin=0, summary_statistic="MAP", site=0)
+
+q()
+
+
