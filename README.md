@@ -1,8 +1,7 @@
 # HiClass Code repository 
 
 The code in this repository was written to explore the effect of hidden cladogenesis for SSE models. 
-HiSSE allows for cladogenesis with no trait change and requires trait changes to anagenetically along the branches (0A -> 0A, 0A for simplicity this is also referred to in this format: [0A,0A,0A]).
-However, this does not allow researchers to ask questions relating to the mode of evolution. ClaSSE allows for trait changes at cladogenetic events but to my knowledge as of April 2025, it has not been implemented with hidden states. To assess if a trait really has an impact on a group's diversification, we ned to compare rates for hidden and empirical states of both anagenetic and cladogenetic transistions. 
+HiSSE allows for cladogenesis with no trait change and requires trait changes to anagenetically along the branches (0A -> 0A, 0A for simplicity this is also referred to in this format: [0A,0A,0A]). Because HiSSE only allows for traits to change along a branch, it really tests if a trait affects the tempo of diversification. To ask questions relating to the *mode* of evolution, we need to assess how a trait affects the rate of cladogenetic events. ClaSSE allows for trait changes at cladogenetic events but to Jenna's knowledge as of April 2025, it has not been implemented with hidden states. Jenna made this figure below at the time she thought ClaSSE had been implemented in a hidden state (i.e., ClaHiSSE). Just picture it with just 0's and 1's and no A or B states. But to be able to really get at if a trait really has an impact on a group's diversification, we need to compare rates for hidden and empirical states of both anagenetic and cladogenetic transitions. 
 
 ![Screen Shot 2025-04-25 at 11 02 40 AM](https://github.com/user-attachments/assets/39a2a060-a7fe-48e5-9e15-824c8db85ace)
 
